@@ -186,7 +186,7 @@ public class RecordingActivity extends AppCompatActivity implements LocationList
                     public void run() {
                         //your code:
                         if(connected == Connected.True)
-                            send("SASASA");
+                            send("{+}");
                         bleHandler.postDelayed(this, bleQueryInterval);
                     }
                 }, bleQueryInterval);
@@ -587,7 +587,7 @@ public class RecordingActivity extends AppCompatActivity implements LocationList
     private void receive(byte[] data) {
         //receiveText.append(new String(data));
         msg_received = new String(data);
-        Toast.makeText(getApplicationContext(), msg_received, Toast.LENGTH_SHORT).show();
+        //Toast.makeText(getApplicationContext(), msg_received, Toast.LENGTH_SHORT).show();
     }
 
     private void status(String str) {
