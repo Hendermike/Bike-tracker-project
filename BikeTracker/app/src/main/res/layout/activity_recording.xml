@@ -16,47 +16,31 @@
         android:textColor="@color/highlight"
         android:textSize="@dimen/text_size"/>
 
-    <TextView
-        android:id="@+id/state"
-        android:layout_below="@+id/header"
-        android:layout_width="match_parent"
-        android:layout_height="30dp"
-        android:background="@color/transparent"
-        android:text="@string/app_name"
-        android:gravity="center"
-        android:textColor="@color/highlight"
-        android:textSize="@dimen/text_size"/>
+    <!--android:layout_above="@+id/trigger_session"-->
 
     <ImageView
         android:id="@+id/compass"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
+        android:layout_below="@id/header"
+        android:layout_alignParentBottom="true"
+        android:layout_marginTop="30dp"
         android:layout_marginBottom="100dp"
-        android:layout_above="@+id/trigger_session"
-        android:src="@drawable/inicial_compass"/>
-
-    <TextView
-        android:id="@+id/suggestion_view"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="@string/are_you_ready"
-        android:textColor="@color/content"
-        android:layout_above="@+id/trigger_session"
-        android:textSize="@dimen/text_size"
-        android:gravity="center"
-        android:background="@color/transparent"/>
+        android:adjustViewBounds="false"
+        android:background="#00FFFFFF"
+        android:src="@drawable/inicial_compass" />
 
     <Button
         android:id="@+id/trigger_session"
-        android:layout_marginTop="40dp"
-        android:layout_marginBottom="70dp"
-        android:layout_alignParentBottom="true"
         android:layout_width="230dp"
         android:layout_height="40dp"
-        android:textSize="@dimen/text_size"
+        android:layout_alignParentBottom="true"
         android:layout_centerHorizontal="true"
+        android:layout_marginTop="40dp"
+        android:layout_marginBottom="50dp"
         android:background="@color/colorPrimary"
         android:text="@string/start_session"
-        android:textColor="@color/highlight"/>
+        android:textColor="@color/highlight"
+        android:textSize="@dimen/text_size" />
 
 </RelativeLayout>

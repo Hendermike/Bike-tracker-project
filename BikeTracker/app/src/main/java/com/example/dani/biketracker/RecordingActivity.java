@@ -1,546 +1,723 @@
 package com.example.dani.biketracker;
 
 import android.Manifest;
+
 import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothDevice;
+
 import android.content.ComponentName;
 import android.content.Context;
+import android.content.DialogInterface;
 import android.content.Intent;
 import android.content.ServiceConnection;
 import android.content.pm.PackageManager;
-import android.graphics.drawable.Drawable;
-import android.hardware.GeomagneticField;
+
 import android.hardware.Sensor;
 import android.hardware.SensorEvent;
 import android.hardware.SensorEventListener;
-import android.hardware.SensorManager;
+
 import android.location.Location;
+
+import android.location.LocationManager;
+import android.os.AsyncTask;
+import android.os.Build;
+import android.os.Bundle;
 import android.os.Handler;
 import android.os.IBinder;
-import android.os.Looper;
-import android.support.annotation.NonNull;
-import android.support.annotation.Nullable;
-import android.support.v4.app.ActivityCompat;
-import android.support.v4.content.ContextCompat;
-import android.support.v7.app.AppCompatActivity;
-import android.os.Bundle;
+
 import android.text.Spannable;
 import android.text.SpannableStringBuilder;
 import android.text.style.ForegroundColorSpan;
-import android.util.Log;
+
 import android.view.View;
-import android.view.animation.Animation;
-import android.view.animation.RotateAnimation;
+
+import android.view.WindowManager;
 import android.widget.Button;
 import android.widget.ImageView;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
+import androidx.appcompat.app.AlertDialog;
+import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.app.ActivityCompat;
+
 import com.google.android.gms.common.ConnectionResult;
+import com.google.android.gms.common.GoogleApiAvailability;
 import com.google.android.gms.common.api.GoogleApiClient;
-import com.google.android.gms.location.FusedLocationProviderClient;
-import com.google.android.gms.location.LocationCallback;
 import com.google.android.gms.location.LocationListener;
 import com.google.android.gms.location.LocationRequest;
-import com.google.android.gms.location.LocationResult;
 import com.google.android.gms.location.LocationServices;
-import com.google.android.gms.location.LocationSettingsRequest;
-import com.google.android.gms.location.SettingsClient;
-import com.google.android.gms.tasks.OnFailureListener;
-import com.google.android.gms.tasks.OnSuccessListener;
-import com.wahoofitness.connector.HardwareConnectorEnums;
-import com.wahoofitness.connector.capabilities.Capability;
-import com.wahoofitness.connector.capabilities.RunSpeed;
-import com.wahoofitness.connector.conn.connections.SensorConnection;
-import com.wahoofitness.connector.conn.connections.params.ConnectionParams;
 
+import com.google.firebase.database.ChildEventListener;
+import com.google.firebase.database.DataSnapshot;
+import com.google.firebase.database.DatabaseError;
+import com.google.firebase.database.DatabaseReference;
+import com.google.firebase.database.FirebaseDatabase;
+
+import java.io.FileOutputStream;
+import java.util.ArrayList;
 import java.util.Observable;
 import java.util.Observer;
 
-import sensors.Synchro;
-import sensors.WahooConnectorService;
-import sensors.WahooConnectorServiceConnection;
+//Control module import
+import com.example.dani.biketracker.controlModule.*;
 
-import static com.google.android.gms.location.LocationServices.getFusedLocationProviderClient;
+import static java.lang.System.currentTimeMillis;
 
 public class RecordingActivity extends AppCompatActivity implements LocationListener, GoogleApiClient.ConnectionCallbacks,
-        GoogleApiClient.OnConnectionFailedListener, WahooConnectorService.Listener, WahooConnectorServiceConnection.Listener, Observer, SensorEventListener, ServiceConnection, SerialListener {
+        GoogleApiClient.OnConnectionFailedListener, Observer, SensorEventListener, ServiceConnection, SerialListener {
+    //-----------------------------------------------
+    // Key DATA
+    //-----------------------------------------------
+    public static long sendTimestamp;
+    public static long receiveTimestamp;
 
+    float desiredLeaderSpeed;
+    double desiredSpacing;
+
+    //-----------------------------------------------
+    //UI fields
+    //----------------------------------------------
     private Button trigger_session;
     private TextView suggestionView, header, state;
-    private Logic logic;
-    private final int LOCATION_PERMISSION_REQUEST_CODE = 1252;
-    protected static final int REQUEST_ENABLE_BT = 0;
-
-    //For the compass
+    //Compass management
     private ImageView compass;
     private float currentDegree = 0f;
-    private SensorManager mSensorManager;
-
-    private static String TAG = "DEBUGGING";
-
-    //BLE link management variables------------------
-    //Getting device's MAC address from MainActivity
-    //private String deviceMAC = MainActivity.getMAC();
-
+    //private SensorManager mSensorManager;
+    //-----------------------------------------------
+    //GPS Google API fields
+    //-----------------------------------------------
+    Location location;
+    private GoogleApiClient googleApiClient;
+    private static final int PLAY_SERVICES_RESOLUTION_REQUEST = 9000;
+    private LocationRequest locationRequest;
+    private long UPDATE_INTERVAL = 1000, FASTEST_INTERVAL = 1000; // 3 seconds
+    //PERMISSION LIST
+    private ArrayList<String> permissionsToRequest;
+    private ArrayList<String> permissionsRejacted;
+    private ArrayList<String> permissions = new ArrayList<>();
+    //Integer permission result request
+    private static final int ALL_PERMISSIONS_RESULT = 1011;
+    //-----------------------------------------------
+    //BLE link management fields
+    //-----------------------------------------------
     private enum Connected { False, Pending, True }
-
-    private String deviceAddress = MainActivity.getMAC();;
+    private String deviceAddress = MainActivity.getMAC();
     private String newline = "\r\n";
-
-    private TextView receiveText;
-
     private SerialSocket socket;
     private SerialService service;
     private boolean initialStart = true;
     public static Connected connected = Connected.False;
-
     boolean mBound = false;
-
-    //BLE link query
-    private static Handler bleHandler = new Handler();
     private String msg_received;
-    private int bleQueryInterval = 1000;
+    private int bleQueryInterval = 500;
     //-----------------------------------------------
+    //Others
+    //-----------------------------------------------
+    private static String TAG = "DEBUGGING";
+    private int contador = 0;
+    private boolean sessionState = false;
+    RMPC rmpc = new RMPC(5);
+    double u_k;
 
+    //State machine
+    public boolean newChild;
+    public boolean newLocation;
+    //-----------------------------------------------
+    //Firebase Database fields
+    //-----------------------------------------------
+    FirebaseDatabase database;
+    DatabaseReference downLink;
+    //DatabaseReference downLink2;
+    DatabaseReference usersRef;
+    DatabaseReference userType;
+    errorBuffer buffer = new errorBuffer();
+    MyAcc MyAcc = new MyAcc();
+    Post previousPost = new Post();
+    //Post previousPost2 = new Post(); //RTT measure: 3 bike test
+    String USER_TYPE = UserConfigActivity.getUserType();
+    int counter = 0;
+
+    //-----------------------------------------------
+    // Lifecycle methods
+    //-----------------------------------------------
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_recording);
+        //Keep screen on
+        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
 
-        //bindService(new Intent(RecordingActivity.class, SerialService.class), this, Context.BIND_AUTO_CREATE);
+        if(USER_TYPE!="LEADER") {desiredSpacing = FollowerSpacingActivity.getDesiredSpacing();}
+        else {desiredLeaderSpeed = LeaderSpeed.getLeaderSpeed();}
+        //newChild = false;
 
-        logic = Logic.getInstance();
-        logic.firestoreSetup();
+        setNewLocation(false);
+        setNewChild(false);
 
-        // Location management methods
-        getLastLocation();
-        startLocationUpdates();
-
-        // Bluetooth management methods
-        //findBluetoothDevice();
-
-
-        //Ui managment methods
+        //GPS
+        initGPS();
+        //UI settings
         initUI();
-        //Buttons management methods
-        initButton();
-
-        //For the compass
-        mSensorManager = (SensorManager) getSystemService(SENSOR_SERVICE);
-
-        //Set activity as observer
-        logic.getObserver().addObserver(this);
-
+        newSessionButton();
+        //For RT Database management
+        database = FirebaseDatabase.getInstance();
+        linkSetting();
     }
 
     @Override
     public void onStart() {
         super.onStart();
-
-        bindService(new Intent(this, SerialService.class), this, Context.BIND_AUTO_CREATE);
-        //Intent serialIntent = new Intent(this, SerialService.class);
-        //bindService(serialIntent, mConnection, Context.BIND_AUTO_CREATE);
-
-        if(service != null){
-            //Toast.makeText(getApplicationContext(), "service != null", Toast.LENGTH_SHORT).show();
-            service.attach((SerialListener) this);}
-        else{
-            //Toast.makeText(getApplicationContext(), "service = null", Toast.LENGTH_SHORT).show();
-            //Toast.makeText(this,"service = null", Toast.LENGTH_SHORT);
-            startService(new Intent(this, SerialService.class)); }// prevents service destroy on unbind from recreated activity caused by orientation change
+        startGPS();
+        startBLE();
     }
 
     @Override
     public void onStop() {
-        if(service != null && !this.isChangingConfigurations()) {
-            service.detach();
-        }
+        //BLE
+        stopBLE();
         super.onStop();
     }
 
+    public boolean newChild() {
+        return this.newChild;
+    }
+
+    public void setNewChild(boolean newChild) {
+        this.newChild = newChild;
+    }
+
+    @Override
     protected void onResume(){
         super.onResume();
-        mSensorManager.registerListener(this, mSensorManager.getDefaultSensor(Sensor.TYPE_ORIENTATION), SensorManager.SENSOR_DELAY_GAME);
+        //GPS:
+        if (!checkPlayServices()) {
+            //locationTv.setText("You need to install Google Play Services to use App properly");
+            Toast.makeText(this, "You need to install Google Play Services to use App properly", Toast.LENGTH_SHORT).show();
+        }
+        //BLE
+        resumeBLE();
+
+        /*if(newLocation() && newChild() && USER_TYPE!="LEADER") {
+            MyAcc.updateAcc(location);
+            //double time = System.currentTimeMillis();
+            suggestionUpdate();
+            //time = System.currentTimeMillis() - time;
+            toRTFireBase(location.getLatitude(), location.getLongitude(), location.getSpeed(), location.getTime());
+            //Wait for new updates
+            setNewLocation(false);
+            setNewChild(false);
+        } else if (newLocation() && USER_TYPE=="LEADER") {
+            suggestionUpdate();
+            toRTFireBase(location.getLatitude(), location.getLongitude(), location.getSpeed(), location.getTime());
+            setNewLocation(false);
+        }*/
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        //GPS: Stop location updates
+        pauseGPS();
+    }
+
+    @Override
+    public void onDestroy() {
+        if (connected != Connected.False) {
+            disconnect();
+        }
+        stopService(new Intent(this, SerialService.class));
+        try {
+            unbindService(this);
+        } catch (Exception ignored) {
+        } //Added
+
+        //uploadRTTBuffer();
+
+        super.onDestroy();
+    }
+
+    @Override
+    public void onBackPressed() {
+        send("{0}");
+        compass.setImageResource(R.drawable.perfect_compass);
+        super.onBackPressed();
+    }
+
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {}
+
+    //-----------------------------------------------
+    // View methods
+    //-----------------------------------------------
+    private void initUI() {
+        this.header = findViewById(R.id.header);
+        this.compass = findViewById(R.id.compass);
+        //this.state = findViewById(R.id.state);
+    }
+
+    int sessionNumber = 0;
+    protected void newSessionButton() {
+        this.trigger_session = findViewById(R.id.trigger_session);
+        this.trigger_session.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                if (sessionState) {
+                    trigger_session.setText(R.string.start_session);
+                    compass.setImageResource(R.drawable.inicial_compass);
+                    send("{0}");
+                    sessionState = false;
+
+                } else {
+                    sessionNumber = sessionNumber + 1;
+                    contador = 0;
+                    /*if (USER_TYPE != "LEADER") {
+                        childAdded();
+                    }*/
+                    trigger_session.setText(R.string.finish_session);
+                    linkSetting();
+                    sessionState = true;
+                    //newChild = true;
+                }
+            }});
+    }
+
+    @Override
+    public void update(Observable observable, Object o) {}
+
+    @Override
+    public void onSensorChanged(SensorEvent sensorEvent) {}
+
+    @Override
+    public void onAccuracyChanged(Sensor sensor, int i) {}
+
+    //-----------------------------------------------
+    // GPS methods
+    //-----------------------------------------------
+    protected void initGPS () {
+        //Adding permissions
+        permissions.add(Manifest.permission.ACCESS_FINE_LOCATION);
+        permissions.add(Manifest.permission.ACCESS_COARSE_LOCATION);
+        permissionsToRequest = permissionsToRequest(permissions);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            if (permissionsToRequest.size() > 0) {
+                requestPermissions(permissionsToRequest.
+                        toArray(new String[permissionsToRequest.size()]), ALL_PERMISSIONS_RESULT);
+            }
+        }
+        googleApiClient = new GoogleApiClient.Builder(this).
+                addApi(LocationServices.API).
+                addConnectionCallbacks(this).
+                addOnConnectionFailedListener(this).build();
+
+    }
+
+    protected void startGPS() {
+        //GPS API connection:
+        if (googleApiClient != null) {
+            googleApiClient.connect();
+        }
+    }
+
+    protected void pauseGPS () {
+        if (googleApiClient != null && googleApiClient.isConnected()) {
+            LocationServices.FusedLocationApi.removeLocationUpdates(googleApiClient, this);
+            googleApiClient.disconnect();
+        }
+    }
+
+    protected void startLocationUpdates() {
+        locationRequest = new LocationRequest();
+        locationRequest.setPriority(LocationRequest.PRIORITY_HIGH_ACCURACY);
+        locationRequest.setInterval(UPDATE_INTERVAL);
+        locationRequest.setFastestInterval(FASTEST_INTERVAL);
+        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED
+                && ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+            Toast.makeText(this, "You need to enable permissions to display location !", Toast.LENGTH_SHORT).show();
+        }
+        LocationServices.FusedLocationApi.requestLocationUpdates(googleApiClient, locationRequest, this);
+    }
+
+    public boolean newLocation() {
+        return this.newLocation;
+    }
+
+    public void setNewLocation(boolean newLocation) {
+        this.newLocation = newLocation;
+    }
+
+    public void onLocationChanged(Location location) {
+
+        if (location != null && sessionState) {
+            // Se actualiza la ubicación con la última adquirida
+            this.location = location;
+            // Se determina la aceleración efectuada desde la última iteración
+            MyAcc.updateAcc(location);
+            // Se calcula y envía a la interfaz la acción de control sugerida
+            suggestionUpdate();
+            // Se actualiza el estado de la bicicleta en la base de datos
+            toRTFireBase(location.getLatitude(), location.getLongitude(), location.getSpeed(), location.getTime());
+        }
+
+    }
+
+    @Override
+    public void onConnectionSuspended(int i) {}
+
+    @Override
+    public void onConnectionFailed(@NonNull ConnectionResult connectionResult) {}
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        switch (requestCode) {
+            case ALL_PERMISSIONS_RESULT:
+                for (String perm : permissionsToRequest) {
+                    if (!hasPermission(perm)) {
+                        permissionsRejacted.add(perm);
+                    }
+                }
+                if (permissionsRejacted.size() > 0) {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                        if (shouldShowRequestPermissionRationale(permissionsRejacted.get(0))) {
+                            new AlertDialog.Builder(this).
+                                    setMessage("These permissions are mandatory to gt your location. You need to allow them.").
+                                    setPositiveButton("OK", new DialogInterface.OnClickListener() {
+                                        @Override
+                                        public void onClick(DialogInterface dialogInterface, int i) {
+                                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                                                requestPermissions(permissionsRejacted.toArray(new String[permissionsRejacted.size()]),
+                                                        ALL_PERMISSIONS_RESULT);
+                                            }
+                                        }
+                                    }).
+                                    setNegativeButton("Cancel", null).create().show();
+                            return;
+
+                        }
+                    }
+                } else {
+                    if (googleApiClient != null) {
+                        googleApiClient.connect();
+                    }
+                }
+
+                break;
+        }
+
+    }
+
+    @Override
+    public void onConnected(@Nullable Bundle bundle) {
+        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED
+                && ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+            return;
+        }
+        // Permissions ok, we get last location
+        location = LocationServices.FusedLocationApi.getLastLocation(googleApiClient);
+        if (location != null) {
+            setNewLocation(true);
+            //locationTv.setText("Latitude : " + location.getLatitude() + "\nLongitude : " + location.getLongitude());
+        }
+        startLocationUpdates();
+    }
+
+    private ArrayList<String> permissionsToRequest(ArrayList<String> wantedPermissions) {
+        ArrayList<String> result = new ArrayList<>();
+        for (String perm : wantedPermissions) {
+            if (!hasPermission(perm)) {
+                result.add(perm);
+            }
+        }
+        return result;
+    }
+
+    private boolean hasPermission(String permission) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            return checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED;
+        }
+        return true;
+    }
+
+    private boolean checkPlayServices() {
+        GoogleApiAvailability apiAvailability = GoogleApiAvailability.getInstance();
+        int resultCode = apiAvailability.isGooglePlayServicesAvailable(this);
+        if (resultCode != ConnectionResult.SUCCESS) {
+            if (apiAvailability.isUserResolvableError(resultCode)) {
+                apiAvailability.getErrorDialog(this, resultCode, PLAY_SERVICES_RESOLUTION_REQUEST);
+            } else {
+                finish();
+            }
+            return false;
+        }
+        return true;
+    }
+
+    //-----------------------------------------------
+    // Firebase methods
+    //-----------------------------------------------
+    public void toRTFireBase(double LAT, double LON, float speed, long time) {
+
+            DatabaseReference upLink = userType.child(Integer.toString(cuenta()));
+            //Data reference
+            Post newPost;
+
+            if (USER_TYPE == "LEADER") {
+                newPost = new Post(Double.toString(LAT),
+                        Double.toString(LON),
+                        speed,
+                        speed,
+                        MyAcc.getMyAcc(),
+                        time);
+            }
+            else {
+                newPost = new Post(Double.toString(LAT),
+                        Double.toString(LON),
+                        speed,
+                        previousPost.getLeaderSpeed(),
+                        MyAcc.getMyAcc(),
+                        time);
+                newPost.setUk(u_k);
+                //, Double.toString(currentSpacing), Double.toString(u_k));
+            }
+
+            /*if (USER_TYPE != "LEADER") {
+                newPost.setSendTime(previousPost.getSendTime()); //RTT measure
+                //newPost.setTravelTime(halfRTT);
+                //RTT measure
+            }
+            else {
+                newPost.setSendTime(System.currentTimeMillis());
+                newPost.setTravelTime(RTT);
+            }*/
+            newPost.setCurrentSpacing(currentSpacing);
+            newPost.setGPSTimestamp(time);
+            //newPost.setSendTime(System.currentTimeMillis());
+            upLink.setValue(newPost);
+
+            //if(USER_TYPE!="LEADER") {
+             //   setNewChild(false);
+            //}
+    }
+
+    public void linkSetting() {
+
+        // Referencia a la base de datos
+        usersRef = database.getReference();
+        // Referencia a la sesión específica
+        usersRef = usersRef.child(Integer.toString(sessionNumber));
+
+        // Ejemplo : si soy el seguidor 1, entonces permaneceré atento a las actualizaciones del seguidor 0.
+        if (USER_TYPE == "FOLLOWER1") {
+            // "UpLink" a la base de datos.
+            userType = usersRef.child("FOLLOWER1");
+            // "DownLink" desde la base de datos.
+            downLink = usersRef.child("FOLLOWER0");
+        }
+        else if (USER_TYPE == "FOLLOWER0") {
+            userType = usersRef.child("FOLLOWER0");
+            downLink = usersRef.child("LEADER");
+        }
+        else if (USER_TYPE == "LEADER") {
+            userType = usersRef.child("LEADER");
+            // Empleado en la medición del RTT.
+            //downLink = usersRef.child("FOLLOWER0");
+        }
+
+        if (USER_TYPE != "LEADER") {
+            // En general, solo los seguidores están atentos a actualizaciones.
+            childAdded();
+        } else {
+            // Empleado en la medición del RTT.
+            //childAdded();
+        }
+
+    }
+
+    double halfRTT;
+    long RTT = 0; //RTT measure
+
+    public void childAdded() {
+        // Se incorpora el escuchador de eventos.
+        downLink.addChildEventListener(new ChildEventListener() {
+            @Override
+            public void onChildAdded(DataSnapshot dataSnapshot, String prevChildKey) {
+                previousPost = dataSnapshot.getValue(Post.class);
+                // Se establece a nivel de clase que hay una nueva actualización.
+                setNewChild(true);
+                // Empleado en la medición de RTT.
+                /*if (USER_TYPE != "LEADER") {
+                } else {
+                    RTT = System.currentTimeMillis() - previousPost.getSendTime();
+                }*/
+            }
+
+            @Override
+            public void onChildChanged(DataSnapshot dataSnapshot, String prevChildKey) {}
+
+            @Override
+            public void onChildRemoved(DataSnapshot dataSnapshot) {}
+
+            @Override
+            public void onChildMoved(DataSnapshot dataSnapshot, String prevChildKey) {}
+
+            @Override
+            public void onCancelled(DatabaseError databaseError) {}
+        });
+
+        //RTT measure: 3 bike test
+        /*if (USER_TYPE == "FOLLOWER0") {
+            downLink2.addChildEventListener(new ChildEventListener() {
+                @Override
+                public void onChildAdded(DataSnapshot dataSnapshot, String prevChildKey) {
+                    newChild = true;
+                    previousPost2 = dataSnapshot.getValue(Post.class);
+
+                    if (USER_TYPE != "LEADER") {
+                        ///halfRTT = System.currentTimeMillis() - previousPost.getSendTime(); (RTT measure)
+                    } else {
+                        //RTT = System.currentTimeMillis() - previousPost2.getSendTime(); RTT measure
+                    }
+
+                }
+
+                @Override
+                public void onChildChanged(DataSnapshot dataSnapshot, String prevChildKey) {}
+
+                @Override
+                public void onChildRemoved(DataSnapshot dataSnapshot) {}
+
+                @Override
+                public void onChildMoved(DataSnapshot dataSnapshot, String prevChildKey) {}
+
+                @Override
+                public void onCancelled(DatabaseError databaseError) {}
+            });
+        }*/
+    }
+
+    double currentSpacing;
+    public double currentSpacing() {
+        /*double dLAT = Math.pow(location.getLatitude() - Double.parseDouble(previousPost.getLat()),2);
+        double dLON = Math.pow(location.getLongitude() - Double.parseDouble(previousPost.getLon()),2);*/
+
+        Location previousBike = new Location("previousBike");
+        previousBike.setLongitude(Double.parseDouble(previousPost.getLon()));
+        previousBike.setLatitude(Double.parseDouble(previousPost.getLat()));
+        previousBike.setAltitude(location.getAltitude());
+
+        //currentSpacing = Math.sqrt(dLAT + dLON);
+        currentSpacing = location.distanceTo(previousBike);
+        return currentSpacing;
+    }
+
+    public pairStatePackage preparePairStatePackage(Post previousPost) {
+        pairStatePackage paquete = new pairStatePackage(0,
+                location.getSpeed(),
+                currentSpacing(),
+                previousPost.userSpeed,
+                previousPost.leaderSpeed,
+                desiredSpacing);
+        return paquete;
+    }
+
+    private int cuenta() {
+        this.contador += 1;
+        return contador;
+    }
+
+    public void suggestionUpdate() {
+
+            if (USER_TYPE != "LEADER") {
+                AsyncTask.execute(() -> {
+                    double currentError = u_k - MyAcc.getMyAcc();
+                    buffer.update(currentError);
+                    pairStatePackage paquete = preparePairStatePackage(previousPost);
+                    u_k = rmpc.getControlAction(buffer, paquete);
+                });
+            }
+
+            //
+             if (counter >= 5 || USER_TYPE == "LEADER") {
+                bleSend(u_k);
+             } else {
+                counter += 1;
+             }
+
+    }
+
+    double mean_acc = 0.001562809973235024;
+    double std_acc = 0.2448071444938314;
+
+    public void bleSend(double u_k) {
+        if(USER_TYPE != "LEADER") { //FOLLOWER CASE
+
+            if(Math.abs(location.getSpeed() - previousPost.getLeaderSpeed()) < 0.5 && Math.abs(currentSpacing - desiredSpacing) < 0.5) {
+                send("{0}");
+                compass.setImageResource(R.drawable.inicial_compass);
+            } else {
+                if(currentSpacing - desiredSpacing > 0) {
+                    send("{+}");
+                    compass.setImageResource(R.drawable.speed_up_compass);
+                } else if (currentSpacing - desiredSpacing < 0) {
+                    send("{-}");
+                    compass.setImageResource(R.drawable.slow_down_compass);
+                } else {
+                }
+                /*if (u_k > mean_acc + 0.5 * std_acc) {
+                    send("{+}");
+                    compass.setImageResource(R.drawable.speed_up_compass);
+                } else if (u_k < mean_acc - 0.5 * std_acc) {
+                    send("{-}");
+                    compass.setImageResource(R.drawable.slow_down_compass);
+                } else {
+                    send("{0}");
+                    compass.setImageResource(R.drawable.inicial_compass);
+                }*/
+            }
+
+        } else { //LEADER CASE
+            if (Math.abs(location.getSpeed() - desiredLeaderSpeed) > 0.5) {
+                if (location.getSpeed() - desiredLeaderSpeed < 0) {
+                    send("{+}");
+                    compass.setImageResource(R.drawable.speed_up_compass);
+                } else if (location.getSpeed() - desiredLeaderSpeed > 0) {
+                    send("{-}");
+                    compass.setImageResource(R.drawable.slow_down_compass);
+                }
+            } else {
+                send("{0}");
+                compass.setImageResource(R.drawable.inicial_compass);
+            }
+            }
+        }
+
+    //-----------------------------------------------
+    // BLE methods
+    //-----------------------------------------------
+    protected void startBLE() {
+        //BLE link service bind and start:
+        bindService(new Intent(this, SerialService.class), this, Context.BIND_AUTO_CREATE);
+        if(service != null){
+            service.attach((SerialListener) this);}
+        else{
+            startService(new Intent(this, SerialService.class)); // prevents service destroy on unbind from recreated activity caused by orientation change
+        }
+    }
+
+    protected void stopBLE() {
+        if(service != null && !this.isChangingConfigurations()) {
+            service.detach();
+        }
+    }
+
+    protected void resumeBLE() {
         if (initialStart && service != null) {
             initialStart = false;
             runOnUiThread(this::connect);
         }
     }
 
-    private void initUI() {
-        this.suggestionView = findViewById(R.id.suggestion_view);
-        this.compass = findViewById(R.id.compass);
-        this.header = findViewById(R.id.header);
-        this.state = findViewById(R.id.state);
-    }
-
-    protected void initButton() {
-        this.trigger_session = findViewById(R.id.trigger_session);
-        this.trigger_session.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-
-                bleHandler.postDelayed(new Runnable() {
-                    @Override
-                    public void run() {
-                        //your code:
-                        if(connected == Connected.True)
-                            send("{+}");
-                        bleHandler.postDelayed(this, bleQueryInterval);
-                    }
-                }, bleQueryInterval);
-
-                if (!logic.isAlive()) {
-                    logic.start();
-                    //trigger_session.setTextColor(ContextCompat.getColor(getApplicationContext(), R.color.highlight));
-
-                }else{
-                    if (logic.isInSession()) {
-                        trigger_session.setText("Start Session");
-                        Log.d(TAG, "Session finished!");
-                        logic.closeSession();
-                        suggestionView.setText("Are you ready?");
-                        trigger_session.setBackground(ContextCompat.getDrawable(getApplicationContext(), R.drawable.start_button));
-                        trigger_session.setTextColor(ContextCompat.getColor(getApplicationContext(), R.color.highlight));
-                        compass.setImageDrawable(ContextCompat.getDrawable(getApplicationContext() ,R.drawable.inicial_compass));
-                        header.setText(getResources().getString(R.string.app_name));
-                        state.setTextColor(ContextCompat.getColor(getApplicationContext(), R.color.transparent));
-                        state.setBackgroundColor(ContextCompat.getColor(getApplicationContext(), R.color.transparent));
-
-                    } else {
-                        trigger_session.setText("Stop Session");
-                        trigger_session.setTextColor(ContextCompat.getColor(getApplicationContext(), R.color.colorSecondary));
-                        trigger_session.setBackground(ContextCompat.getDrawable(getApplicationContext(), R.drawable.finish_button));
-                        logic.startNewSession();
-                    }
-                }
-            }
-        });
-    }
-
-
-    public void getLastLocation() {
-
-        // Get last known recent location using new Google Play Services SDK (v11+)
-        FusedLocationProviderClient locationClient = getFusedLocationProviderClient(this);
-
-        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED && ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
-
-            ActivityCompat.requestPermissions(this, new String[]{android.Manifest.permission.ACCESS_FINE_LOCATION}, LOCATION_PERMISSION_REQUEST_CODE);
-
-            return;
-        }
-
-        locationClient.getLastLocation()
-                .addOnSuccessListener(new OnSuccessListener<Location>() {
-
-                    @Override
-                    public void onSuccess(Location location) {
-                        // GPS location can be null if GPS is switched off
-                        if (location != null) {
-
-                            onLocationChanged(location);
-                        }
-                    }
-                })
-                .addOnFailureListener(new OnFailureListener() {
-                    @Override
-                    public void onFailure(@NonNull Exception e) {
-                        Log.d(TAG, "Error trying to get last GPS location");
-                        e.printStackTrace();
-                    }
-                });
-    }
-
-
-    // Trigger new location updates at interval
-    protected void startLocationUpdates() {
-
-        // Create the location request to start receiving updates
-        LocationRequest mLocationRequest = new LocationRequest();
-        mLocationRequest.setPriority(LocationRequest.PRIORITY_HIGH_ACCURACY);
-        long UPDATE_INTERVAL = 2000;
-        mLocationRequest.setInterval(UPDATE_INTERVAL);
-        long FASTEST_INTERVAL = 1000;
-        mLocationRequest.setFastestInterval(FASTEST_INTERVAL);
-
-        // Create LocationSettingsRequest object using location request
-        LocationSettingsRequest.Builder builder = new LocationSettingsRequest.Builder();
-        builder.addLocationRequest(mLocationRequest);
-        LocationSettingsRequest locationSettingsRequest = builder.build();
-
-        // Check whether location settings are satisfied
-        // https://developers.google.com/android/reference/com/google/android/gms/location/SettingsClient
-        SettingsClient settingsClient = LocationServices.getSettingsClient(this);
-        settingsClient.checkLocationSettings(locationSettingsRequest);
-
-        // new Google API SDK v11 uses getFusedLocationProviderClient(this)
-        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED && ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
-            return;
-        }
-
-        getFusedLocationProviderClient(this).requestLocationUpdates(mLocationRequest, new LocationCallback() {
-                    @Override
-                    public void onLocationResult(LocationResult locationResult) {
-                        onLocationChanged(locationResult.getLastLocation());
-                    }
-                },
-                Looper.myLooper());
-    }
-
-
-    public void onLocationChanged(Location location) {
-        //If the location changes, the logic receive the new location
-        logic.setMyLoc(location);
-    }
-
-
-    @Override
-    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
-
-        if (requestCode == LOCATION_PERMISSION_REQUEST_CODE) {
-
-            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-
-            } else {
-                int duration = Toast.LENGTH_SHORT;
-                Toast toast = Toast.makeText(this, "We need your location for the app to work", duration);
-                toast.show();
-            }
-        }
-    }
-
-    private final RunSpeed.Listener mRunSpeedListener = new RunSpeed.Listener() {
-        private RunSpeed.Data mLastCallbackData;
-
-        @Override
-        public void onRunSpeedData(RunSpeed.Data data) {
-            mLastCallbackData = data;
-            // TODO: REACT
-        }
-
-        @Override
-        public void onRunSpeedDataReset() {
-            //TODO: registerCallbackResult("onRunSpeedDataReset", "");
-
-        }
-    };
-
-    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
-        // Check which request we're responding to
-        if (requestCode == REQUEST_ENABLE_BT) {
-            // Make sure the request was successful
-            if (resultCode == RESULT_OK) {
-                Log.d(TAG, data.getDataString());
-            }
-        }
-    }
-/*
-    private void findBluetoothDevice() {
-        BluetoothAdapter bluetoothAdapter = BluetoothAdapter.getDefaultAdapter();
-        if (bluetoothAdapter == null) {
-            // device doesn't support bluetooth
-            Log.d(TAG, "The device doesn't support bluetooth");
-
-        } else {
-
-            // bluetooth is off, ask user to on it.
-            if (!bluetoothAdapter.isEnabled()) {
-                Log.d(TAG, "Bluetooth is off");
-                Intent enableAdapter = new Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE);
-                startActivityForResult(enableAdapter, 0);
-            }
-
-            // Do whatever you want to do with your bluetoothAdapter
-            Set<BluetoothDevice> all_devices = bluetoothAdapter.getBondedDevices();
-            if (all_devices.size() > 0) {
-                for (BluetoothDevice currentDevice : all_devices) {
-                    Log.d(TAG, "Device Name " + currentDevice.getName());
-                    if (currentDevice.getName().equals(DEVICE_NAME)) {
-                        BluetoothDevice bluetoothDevice = currentDevice;
-                        logic.setBluetoothConnection(bluetoothDevice);
-                        boolean bluetoothDeviceFound = true;
-                        break;
-                    }
-                }
-            }
-        }
-    }
-*/
-
-
-    @Override
-    public void onConnected(@Nullable Bundle bundle) {
-
-    }
-
-    @Override
-    public void onConnectionSuspended(int i) {
-
-    }
-
-    @Override
-    public void onConnectionFailed(@NonNull ConnectionResult connectionResult) {
-
-    }
-
-    @Override
-    public void onDeviceDiscovered(ConnectionParams params) {
-
-    }
-
-    @Override
-    public void onDiscoveredDeviceLost(ConnectionParams params) {
-
-    }
-
-    @Override
-    public void onDiscoveredDeviceRssiChanged(ConnectionParams params) {
-
-    }
-
-    @Override
-    public void onFirmwareUpdateRequired(SensorConnection sensorConnection, String currentVersionNumber, String recommendedVersion) {
-
-    }
-
-    @Override
-    public void onNewCapabilityDetected(SensorConnection sensorConnection, Capability.CapabilityType capabilityType) {
-
-    }
-
-    @Override
-    public void onSensorConnectionStateChanged(SensorConnection sensorConnection, HardwareConnectorEnums.SensorConnectionState state) {
-
-    }
-
-    @Override
-    public void onHardwareConnectorServiceConnected(WahooConnectorService hardwareConnectorService) {
-
-        hardwareConnectorService.addListener(RecordingActivity.this);
-        RecordingActivity.this
-                .onHardwareConnectorServiceConnected(hardwareConnectorService);
-         //getRunSpeedCap().addListener(mRunSpeedListener);
-
-    }
-    @Override
-    public void onHardwareConnectorServiceDisconnected() {
-
-    }
-
-    @Override
-    public void onDestroy() {
-
-        closeHandler();
-
-        if (connected != Connected.False)
-            disconnect();
-
-        stopService(new Intent(this, SerialService.class));
-
-        try { unbindService(this); } catch(Exception ignored) {} //Added
-
-        super.onDestroy();
-    }
-
-    @Override
-    public void update(Observable observable, Object o) {
-        //Log.d(TAG, "The suggestion is:" + (logic.getSuggestion()));
-        header.setText(logic.getRouteName());
-        runOnUiThread(new Runnable() {
-            @Override
-            public void run() {
-                if (logic.isOnRoute()) {
-                    state.setTextColor(ContextCompat.getColor(getApplicationContext(), R.color.on_text));
-                    state.setBackgroundColor(ContextCompat.getColor(getApplicationContext(), R.color.on_background));
-                    state.setText("On Route");
-
-                    switch (logic.getSuggestion()) {
-                        case -1:
-                            //suggestionView.setText("Stop: the leader is " + logic.getGap() + " meters behind you");
-                            if (logic.getMyLoc().getSpeed() < 1) {
-                                suggestionView.setText("Hold on!");
-                                compass.setImageResource(R.drawable.hold_on_compass);
-                            } else {
-                                suggestionView.setText("Slow down!");
-                                compass.setImageResource(R.drawable.slow_down_compass);
-                            }
-                            break;
-
-                        case 0:
-                            suggestionView.setText("You are in the group!");
-                            compass.setImageResource(R.drawable.perfect_compass);
-                            break;
-
-                        case 1:
-                            suggestionView.setText("Speed up!");
-                            compass.setImageResource(R.drawable.speed_up_compass);
-                            break;
-                    }
-                }else{
-                    suggestionView.setText("Join route");
-                    compass.setImageResource(R.drawable.off_route_compass);
-                    state.setTextColor(ContextCompat.getColor(getApplicationContext(), R.color.off_text));
-                    state.setBackgroundColor(ContextCompat.getColor(getApplicationContext(), R.color.off_background));
-                    state.setText("Off Route");
-                }
-            }
-        });
-    }
-
-    @Override
-    public void onSensorChanged(SensorEvent sensorEvent) {
-
-        // get the angle around the z-axis rotated
-        float degree = Math.round(sensorEvent.values[0]);
-
-        Location myLoc = logic.getMyLoc();
-        Location targetLocation = logic.getTarget();
-
-
-        GeomagneticField gField = new GeomagneticField((float)myLoc.getLatitude(),(float)myLoc.getLongitude(), (float)myLoc.getAltitude(),myLoc.getTime());
-        degree += gField.getDeclination();
-
-        float bearing = myLoc.bearingTo(targetLocation);
-
-        degree = normalizeDegree((bearing-degree)* -1);
-
-        // create a rotation animation (reverse turn degree degrees)
-        RotateAnimation ra = new RotateAnimation(
-                currentDegree,
-                -degree,
-                Animation.RELATIVE_TO_SELF, 0.5f,
-                Animation.RELATIVE_TO_SELF,
-                0.5f);
-
-        // how long the animation will take place
-        ra.setDuration(210);
-
-        // set the animation after the end of the reservation status
-        ra.setFillAfter(true);
-
-        // Start the animation
-        compass.startAnimation(ra);
-        currentDegree = -degree;
-    }
-
-    private float normalizeDegree(float value) {
-        if (value >= 0.0f && value <= 180.0f) {
-            return value;
-        } else {
-            return 180 + (180 + value);
-        }
-    }
-    @Override
-    public void onAccuracyChanged(Sensor sensor, int i) {
-
-    }
-
-    //BLE management methods
-    /*
-     * Serial + UI
-     */
     private void connect() {
         try {
             BluetoothAdapter bluetoothAdapter = BluetoothAdapter.getDefaultAdapter();
@@ -571,9 +748,6 @@ public class RecordingActivity extends AppCompatActivity implements LocationList
             return;
         }
         try {
-            SpannableStringBuilder spn = new SpannableStringBuilder(str+'\n');
-            spn.setSpan(new ForegroundColorSpan(getResources().getColor(R.color.colorSendText)), 0, spn.length(), Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
-
             //receiveText.append(spn);
             byte[] data = (str + newline).getBytes();
             //Call to actually send data
@@ -585,20 +759,17 @@ public class RecordingActivity extends AppCompatActivity implements LocationList
     }
 
     private void receive(byte[] data) {
-        //receiveText.append(new String(data));
         msg_received = new String(data);
         //Toast.makeText(getApplicationContext(), msg_received, Toast.LENGTH_SHORT).show();
     }
 
+    //TODO: verificar que commnets no crasheen la app
     private void status(String str) {
-        SpannableStringBuilder spn = new SpannableStringBuilder(str+'\n');
-        spn.setSpan(new ForegroundColorSpan(getResources().getColor(R.color.colorStatusText)), 0, spn.length(), Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
+        //SpannableStringBuilder spn = new SpannableStringBuilder(str+'\n');
+        //spn.setSpan(new ForegroundColorSpan(getResources().getColor(R.color.colorStatusText)), 0, spn.length(), Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
         //receiveText.append(spn);
     }
 
-    /*
-     * SerialListener
-     */
     @Override
     public void onServiceConnected(ComponentName name, IBinder binder) {
         service = ((SerialService.SerialBinder) binder).getService();
@@ -634,17 +805,6 @@ public class RecordingActivity extends AppCompatActivity implements LocationList
     public void onSerialIoError(Exception e) {
         status("connection lost: " + e.getMessage());
         disconnect();
-    }
-
-    public static void closeHandler() {
-        bleHandler.removeCallbacksAndMessages(null);
-    }
-
-    @Override
-    public void onBackPressed() {
-        //Toast.makeText(this, "Back Button is being Pressed!", Toast.LENGTH_SHORT).show();
-        closeHandler();
-        super.onBackPressed();
     }
 
 }
