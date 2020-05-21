@@ -29,6 +29,7 @@ import android.text.Spannable;
 import android.text.SpannableStringBuilder;
 import android.text.style.ForegroundColorSpan;
 
+import android.util.Log;
 import android.view.View;
 
 import android.view.WindowManager;
@@ -68,6 +69,8 @@ import static java.lang.System.currentTimeMillis;
 
 public class RecordingActivity extends AppCompatActivity implements LocationListener, GoogleApiClient.ConnectionCallbacks,
         GoogleApiClient.OnConnectionFailedListener, Observer, SensorEventListener, ServiceConnection, SerialListener {
+
+    public Thread sessionThread;
     //-----------------------------------------------
     // Key DATA
     //-----------------------------------------------
@@ -120,7 +123,7 @@ public class RecordingActivity extends AppCompatActivity implements LocationList
     private int contador = 0;
     private boolean sessionState = false;
     RMPC rmpc = new RMPC(5);
-    double u_k;
+    double u_k = 0;
 
     //State machine
     public boolean newChild;
@@ -134,7 +137,7 @@ public class RecordingActivity extends AppCompatActivity implements LocationList
     DatabaseReference usersRef;
     DatabaseReference userType;
     errorBuffer buffer = new errorBuffer();
-    MyAcc MyAcc = new MyAcc();
+    EstAcc accelerationEstimator = new EstAcc();
     Post previousPost = new Post();
     //Post previousPost2 = new Post(); //RTT measure: 3 bike test
     String USER_TYPE = UserConfigActivity.getUserType();
@@ -152,13 +155,9 @@ public class RecordingActivity extends AppCompatActivity implements LocationList
 
         if(USER_TYPE!="LEADER") {desiredSpacing = FollowerSpacingActivity.getDesiredSpacing();}
         else {desiredLeaderSpeed = LeaderSpeed.getLeaderSpeed();}
-        //newChild = false;
-
-        setNewLocation(false);
-        setNewChild(false);
-
+        newChild = true;
         //GPS
-        initGPS();
+        //initGPS();
         //UI settings
         initUI();
         newSessionButton();
@@ -199,7 +198,7 @@ public class RecordingActivity extends AppCompatActivity implements LocationList
         }
         //BLE
         resumeBLE();
-
+        Log.d(TAG, "onResume");
         /*if(newLocation() && newChild() && USER_TYPE!="LEADER") {
             MyAcc.updateAcc(location);
             //double time = System.currentTimeMillis();
@@ -254,7 +253,6 @@ public class RecordingActivity extends AppCompatActivity implements LocationList
     private void initUI() {
         this.header = findViewById(R.id.header);
         this.compass = findViewById(R.id.compass);
-        //this.state = findViewById(R.id.state);
     }
 
     int sessionNumber = 0;
@@ -266,9 +264,10 @@ public class RecordingActivity extends AppCompatActivity implements LocationList
                 if (sessionState) {
                     trigger_session.setText(R.string.start_session);
                     compass.setImageResource(R.drawable.inicial_compass);
-                    send("{0}");
+                    Log.d(TAG, "Fin de la sesión...");
+                    sessionThread.interrupt();
+                    //send("{0}");
                     sessionState = false;
-
                 } else {
                     sessionNumber = sessionNumber + 1;
                     contador = 0;
@@ -277,7 +276,23 @@ public class RecordingActivity extends AppCompatActivity implements LocationList
                     }*/
                     trigger_session.setText(R.string.finish_session);
                     linkSetting();
+                    //RTTPacket2DB("RTT_TEST");
                     sessionState = true;
+                    sessionThread = new Thread(new Runnable() {
+                        public void run() {
+                            Log.d(TAG, "En sesión...");
+                            // a potentially time consuming task
+                            while(sessionState) {
+                                if (newChild) {
+                                    RTTPacket2DB("RTT_TEST");
+                                    newChild = false;
+                                } else {
+                                    Log.d(TAG, "No new packets available...");
+                                }
+                            }
+                        }
+                    });
+                    sessionThread.start();
                     //newChild = true;
                 }
             }});
@@ -328,6 +343,7 @@ public class RecordingActivity extends AppCompatActivity implements LocationList
     }
 
     protected void startLocationUpdates() {
+        Log.d(TAG, "Running startLocationUpdates");
         locationRequest = new LocationRequest();
         locationRequest.setPriority(LocationRequest.PRIORITY_HIGH_ACCURACY);
         locationRequest.setInterval(UPDATE_INTERVAL);
@@ -339,25 +355,21 @@ public class RecordingActivity extends AppCompatActivity implements LocationList
         LocationServices.FusedLocationApi.requestLocationUpdates(googleApiClient, locationRequest, this);
     }
 
-    public boolean newLocation() {
-        return this.newLocation;
-    }
-
-    public void setNewLocation(boolean newLocation) {
-        this.newLocation = newLocation;
-    }
-
     public void onLocationChanged(Location location) {
-
-        if (location != null && sessionState) {
+        Log.d(TAG, "Running onLocationChanged");
+        if (location != null) {
             // Se actualiza la ubicación con la última adquirida
             this.location = location;
-            // Se determina la aceleración efectuada desde la última iteración
-            MyAcc.updateAcc(location);
-            // Se calcula y envía a la interfaz la acción de control sugerida
-            suggestionUpdate();
-            // Se actualiza el estado de la bicicleta en la base de datos
-            toRTFireBase(location.getLatitude(), location.getLongitude(), location.getSpeed(), location.getTime());
+            if(sessionState) {
+
+                // Se determina la aceleración efectuada desde la última iteración
+                accelerationEstimator.update(location);
+                // Se calcula y envía a la interfaz la acción de control sugerida
+                //suggestionUpdate();
+                // Se actualiza el estado de la bicicleta en la base de datos
+                //toRTFireBase(location.getLatitude(), location.getLongitude(), location.getSpeed(), location.getTime());
+                RTTPacket2DB("NORMAL");
+            }
         }
 
     }
@@ -370,6 +382,7 @@ public class RecordingActivity extends AppCompatActivity implements LocationList
 
     @Override
     public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        Log.d(TAG, "Running onRequestPermissionsResult");
         switch (requestCode) {
             case ALL_PERMISSIONS_RESULT:
                 for (String perm : permissionsToRequest) {
@@ -409,6 +422,7 @@ public class RecordingActivity extends AppCompatActivity implements LocationList
 
     @Override
     public void onConnected(@Nullable Bundle bundle) {
+        Log.i(TAG, "onConnected");
         if (ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED
                 && ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
             return;
@@ -416,7 +430,6 @@ public class RecordingActivity extends AppCompatActivity implements LocationList
         // Permissions ok, we get last location
         location = LocationServices.FusedLocationApi.getLastLocation(googleApiClient);
         if (location != null) {
-            setNewLocation(true);
             //locationTv.setText("Latitude : " + location.getLatitude() + "\nLongitude : " + location.getLongitude());
         }
         startLocationUpdates();
@@ -467,7 +480,7 @@ public class RecordingActivity extends AppCompatActivity implements LocationList
                         Double.toString(LON),
                         speed,
                         speed,
-                        MyAcc.getMyAcc(),
+                        accelerationEstimator.getEstimation(),
                         time);
             }
             else {
@@ -475,7 +488,7 @@ public class RecordingActivity extends AppCompatActivity implements LocationList
                         Double.toString(LON),
                         speed,
                         previousPost.getLeaderSpeed(),
-                        MyAcc.getMyAcc(),
+                        accelerationEstimator.getEstimation(),
                         time);
                 newPost.setUk(u_k);
                 //, Double.toString(currentSpacing), Double.toString(u_k));
@@ -491,13 +504,63 @@ public class RecordingActivity extends AppCompatActivity implements LocationList
                 newPost.setTravelTime(RTT);
             }*/
             newPost.setCurrentSpacing(currentSpacing);
-            newPost.setGPSTimestamp(time);
             //newPost.setSendTime(System.currentTimeMillis());
             upLink.setValue(newPost);
 
             //if(USER_TYPE!="LEADER") {
              //   setNewChild(false);
             //}
+    }
+
+    public void RTTPacket2DB(String MODE) {
+
+        DatabaseReference upLink = userType.child(Integer.toString(cuenta()));
+        //Data reference
+        Post newPost;
+        float speed;
+        double time;
+        String latitude;
+        String longitude;
+        /* Operation mode setting */
+        if (MODE == "RTT_TEST") {
+            speed = 99;
+            time = 99;
+            latitude = Double.toString(99);
+            longitude = Double.toString(99);
+        } else {
+            speed = location.getSpeed();
+            time = location.getTime();
+            latitude = Double.toString(location.getLatitude());
+            longitude = Double.toString(location.getLongitude());
+        }
+
+        if (USER_TYPE == "LEADER") {
+            newPost = new Post(latitude,
+                    longitude,
+                    speed,
+                    speed,
+                    accelerationEstimator.getEstimation(),
+                    time);
+
+            newPost.setSendTime(System.currentTimeMillis());
+            newPost.setTravelTime(RTT);
+        }
+        else {
+            newPost = new Post(latitude,
+                    longitude,
+                    speed,
+                    previousPost.getLeaderSpeed(),
+                    accelerationEstimator.getEstimation(),
+                    time);
+
+            newPost.setUk(u_k);
+            newPost.setSendTime(previousPost.getSendTime());
+        }
+
+        newPost.setCurrentSpacing(currentSpacing);
+
+        upLink.setValue(newPost);
+        Log.d(TAG, "Paquete enviado a la base de datos...");
     }
 
     public void linkSetting() {
@@ -521,7 +584,7 @@ public class RecordingActivity extends AppCompatActivity implements LocationList
         else if (USER_TYPE == "LEADER") {
             userType = usersRef.child("LEADER");
             // Empleado en la medición del RTT.
-            //downLink = usersRef.child("FOLLOWER0");
+            downLink = usersRef.child("FOLLOWER0");
         }
 
         if (USER_TYPE != "LEADER") {
@@ -529,29 +592,25 @@ public class RecordingActivity extends AppCompatActivity implements LocationList
             childAdded();
         } else {
             // Empleado en la medición del RTT.
-            //childAdded();
+            childAdded();
         }
 
     }
 
-    double halfRTT;
-    long RTT = 0; //RTT measure
+    long RTT = 99; //RTT measure
 
     public void childAdded() {
         // Se incorpora el escuchador de eventos.
         downLink.addChildEventListener(new ChildEventListener() {
             @Override
             public void onChildAdded(DataSnapshot dataSnapshot, String prevChildKey) {
-                previousPost = dataSnapshot.getValue(Post.class);
-                // Se establece a nivel de clase que hay una nueva actualización.
-                setNewChild(true);
-                // Empleado en la medición de RTT.
-                /*if (USER_TYPE != "LEADER") {
-                } else {
+                previousPost = dataSnapshot.getValue(Post.class);                                   //Se obtiene el último dato de la bicicleta previa
+                if (USER_TYPE == "LEADER") {                                                        //Condicional para la estimación del RTT
                     RTT = System.currentTimeMillis() - previousPost.getSendTime();
-                }*/
-            }
-
+                }
+                newChild = true;
+                Log.d(TAG, "Se obtuvo el nuevo dato de la siguiente bicicleta");
+                }
             @Override
             public void onChildChanged(DataSnapshot dataSnapshot, String prevChildKey) {}
 
@@ -564,43 +623,10 @@ public class RecordingActivity extends AppCompatActivity implements LocationList
             @Override
             public void onCancelled(DatabaseError databaseError) {}
         });
-
-        //RTT measure: 3 bike test
-        /*if (USER_TYPE == "FOLLOWER0") {
-            downLink2.addChildEventListener(new ChildEventListener() {
-                @Override
-                public void onChildAdded(DataSnapshot dataSnapshot, String prevChildKey) {
-                    newChild = true;
-                    previousPost2 = dataSnapshot.getValue(Post.class);
-
-                    if (USER_TYPE != "LEADER") {
-                        ///halfRTT = System.currentTimeMillis() - previousPost.getSendTime(); (RTT measure)
-                    } else {
-                        //RTT = System.currentTimeMillis() - previousPost2.getSendTime(); RTT measure
-                    }
-
-                }
-
-                @Override
-                public void onChildChanged(DataSnapshot dataSnapshot, String prevChildKey) {}
-
-                @Override
-                public void onChildRemoved(DataSnapshot dataSnapshot) {}
-
-                @Override
-                public void onChildMoved(DataSnapshot dataSnapshot, String prevChildKey) {}
-
-                @Override
-                public void onCancelled(DatabaseError databaseError) {}
-            });
-        }*/
     }
 
-    double currentSpacing;
+    double currentSpacing = 99;
     public double currentSpacing() {
-        /*double dLAT = Math.pow(location.getLatitude() - Double.parseDouble(previousPost.getLat()),2);
-        double dLON = Math.pow(location.getLongitude() - Double.parseDouble(previousPost.getLon()),2);*/
-
         Location previousBike = new Location("previousBike");
         previousBike.setLongitude(Double.parseDouble(previousPost.getLon()));
         previousBike.setLatitude(Double.parseDouble(previousPost.getLat()));
@@ -630,7 +656,7 @@ public class RecordingActivity extends AppCompatActivity implements LocationList
 
             if (USER_TYPE != "LEADER") {
                 AsyncTask.execute(() -> {
-                    double currentError = u_k - MyAcc.getMyAcc();
+                    double currentError = u_k - accelerationEstimator.getEstimation();
                     buffer.update(currentError);
                     pairStatePackage paquete = preparePairStatePackage(previousPost);
                     u_k = rmpc.getControlAction(buffer, paquete);
@@ -652,7 +678,7 @@ public class RecordingActivity extends AppCompatActivity implements LocationList
     public void bleSend(double u_k) {
         if(USER_TYPE != "LEADER") { //FOLLOWER CASE
 
-            if(Math.abs(location.getSpeed() - previousPost.getLeaderSpeed()) < 0.5 && Math.abs(currentSpacing - desiredSpacing) < 0.5) {
+            /*if(Math.abs(location.getSpeed() - previousPost.getLeaderSpeed()) < 0.5 && Math.abs(currentSpacing - desiredSpacing) < 0.5) {
                 send("{0}");
                 compass.setImageResource(R.drawable.inicial_compass);
             } else {
@@ -663,9 +689,12 @@ public class RecordingActivity extends AppCompatActivity implements LocationList
                     send("{-}");
                     compass.setImageResource(R.drawable.slow_down_compass);
                 } else {
-                }
-                /*if (u_k > mean_acc + 0.5 * std_acc) {
+                }*/
+
+                if (u_k > mean_acc + 0.5 * std_acc) {
+                    // Notificación a la interfaz háptica
                     send("{+}");
+                    // Notificación mediante interfaz visual
                     compass.setImageResource(R.drawable.speed_up_compass);
                 } else if (u_k < mean_acc - 0.5 * std_acc) {
                     send("{-}");
@@ -673,8 +702,7 @@ public class RecordingActivity extends AppCompatActivity implements LocationList
                 } else {
                     send("{0}");
                     compass.setImageResource(R.drawable.inicial_compass);
-                }*/
-            }
+                }
 
         } else { //LEADER CASE
             if (Math.abs(location.getSpeed() - desiredLeaderSpeed) > 0.5) {
@@ -738,7 +766,7 @@ public class RecordingActivity extends AppCompatActivity implements LocationList
     private void disconnect() {
         connected = Connected.False;
         service.disconnect();
-        socket.disconnect();
+        //socket.disconnect();
         socket = null;
     }
 

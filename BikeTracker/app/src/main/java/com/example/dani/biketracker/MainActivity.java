@@ -22,11 +22,17 @@ public class MainActivity extends AppCompatActivity implements FragmentManager.O
         setSupportActionBar(toolbar);
         getSupportFragmentManager().addOnBackStackChangedListener(this);
         if (savedInstanceState == null) {
-            getSupportFragmentManager().beginTransaction().add(R.id.fragment, new DevicesFragment(), "devices").commit();
+            //getSupportFragmentManager().beginTransaction().add(R.id.fragment, new DevicesFragment(), "devices").commit();
         }
         else {
             onBackStackChanged();
         }
+    }
+
+    @Override
+    public void onResume() {
+        super.onResume();
+        onArticleSelected("TEST_ADDRESS");
     }
 
     @Override
